@@ -1,7 +1,7 @@
 ---
-title: "Title of Analysis Goes Here"
-author: "Your Name (netid@illinois.edu)"
-date: "Insert Date Here"
+title: "Predicting Pitches from STATCAST"
+author: "Alan Qin (aqin2@illinois.edu)"
+date: "12/07/2020"
 output:
   html_document: 
     theme: default
@@ -9,11 +9,15 @@ output:
 ---
 
 ```{r, setup, include = FALSE}
-knitr::opts_chunk$set(echo = FALSE, fig.align = 'center')
+knitr::opts_chunk$set(echo = TRUE, fig.align = 'center')
 ```
 
 ```{r, load-packages, include = FALSE}
-# load packages
+library(tidyverse)
+library(randomForest)
+library(caret)
+library(naivebayes)
+library(MLmetrics)
 ```
 
 ```{r read-data, warning = FALSE, message = FALSE}
@@ -27,42 +31,153 @@ pitches_2020_post = readr::read_csv("data/pitches_2020_post.csv")
 
 ## Abstract
 
-> Abstract text goes here.
+>  We are doing this analysis in order to analyze the given data and predict a type of pitch based on different parameters i.e. release speed, rotation, etc. To do this analysis, we have to subset, examine the data, create the models, then evaluate each model.  After creating many different machine learning models, I used a decision tree model to predict the pitches 80% of the time on the testing data. Despite our results, we should use the chosen model on a larger dataset before it should be put into use.
 
 ***
 
 ## Introduction
 
-Write your introduction here.
+In the MLB there are a multitude of statistics that you can access 
+
+The goal of this data analysis is to create a classifier for baseball pitches that can be used to classify different types of baseball pitches based on the data from Statcast and PITCH f/x. Another benefit of this analysis is that the data we use does not involve any deep learning techniques that use raw video data. To detect each type of pitch, machine learning methods are applied to the aforementioned data set and then used to predict pitch type based on the data given. The results show that there is a lot of potential for further optimization with the use of more data as well as using more computationally complex models that my computer did not have the power to run. 
+
 
 ***
 
 ## Methods
 
-Describe the methods used in this section.
-
 ### Data
 
-Specifically describe the data and how it is used here.
+#### Looking at data 
+```{r, echo = FALSE}
+skimr::skim(pitches_2020_regular)
+```
+This data is from STATCAST and PITCH f/x and contains data about pitches from the 2020 MLB season. Looking at the data, there were a few things that caught my eye, the first was that `release_pos_x` and `release_pos_y` were the exact same for each observation. To fix this, I just kept one of the two identical variables, `release_pos_x`. Another variable I got rid of was the `batter` variable because there is another variable called `player_name` which serves the same purpose.  Another thing I saw was that there were some observations that did not have `release_spin_rate` and `release_extension`. There were only 294 and 515 missing data points respectively, so to counteract this issue, I removed the data points with missing data. I thought this was fine because there were over 260k observations so the missing data represents .2% of the data. I then manipulated some numerical variables to factors because the variables did not make sense as numeric i.e. pitcher ids, zone, etc. 
+
+```{r, include = FALSE}
+# Change some columns to factors 
+pitches_2020_regular$pitch_type = as.factor(pitches_2020_regular$pitch_type)
+pitches_2020_regular$zone = as.factor(pitches_2020_regular$zone)
+pitches_2020_regular$stand = as.factor(pitches_2020_regular$stand)
+pitches_2020_regular$p_throws = as.factor(pitches_2020_regular$p_throws)
+pitches_2020_regular$batter = as.factor(pitches_2020_regular$batter)
+pitches_2020_regular$player_name = as.factor(pitches_2020_regular$player_name)
+
+pitches_2020_post$pitch_type = as.factor(pitches_2020_post$pitch_type)
+pitches_2020_post$zone = as.factor(pitches_2020_post$zone)
+pitches_2020_post$stand = as.factor(pitches_2020_post$stand)
+pitches_2020_post$p_throws = as.factor(pitches_2020_post$p_throws)
+pitches_2020_post$batter = as.factor(pitches_2020_post$batter)
+pitches_2020_post$player_name = as.factor(pitches_2020_post$player_name)
+
+# Remove observations with NAs
+pitches_2020_regular = na.omit(pitches_2020_regular)
+pitches_2020_post = na.omit(pitches_2020_post)
+
+# Remove identical columns
+pitches_2020_regular$release_pos_x = NULL
+pitches_2020_regular$player_name = NULL
+pitches_2020_regular$batter = NULL
+pitches_2020_regular$pitcher = NULL
+pitches_2020_regular$zone = NULL
+pitches_2020_regular$game_date = NULL
+
+pitches_2020_post$release_pos_x = NULL
+pitches_2020_post$batter = NULL
+pitches_2020_post$player_name = NULL
+pitches_2020_post$pitcher = NULL
+pitches_2020_post$zone = NULL
+pitches_2020_post$game_date = NULL
+```
+
+```{r, include = FALSE}
+skimr::skim(pitches_2020_regular)
+```
+
+
+```{r}
+set.seed(432)
+pitch_10k = sample_n(pitches_2020_regular, 10000)
+pitch_test_1k = sample_n(pitches_2020_post, 1000)
+```
+I then sampled the training and test data because I do not have the computational power to do models on such large data sets. 
 
 ### Modeling
 
-Discuss your modeling and validation strategy here.
+```{r, include = FALSE}
+accuracy = function(actual, predicted) {
+  mean(actual == predicted)
+}
+```
+
+After wrangling with the data, I am now able to create my models and make predictions. Before that however, I want to establish a baseline for the models. The metric I will be basing my models off of will be accuracy. The baseline will be the majority class which in the case of the training data will be `FF` (Four Seam). That accuracy would be 34% so anything higher than that would be an improvement. I also tried playing the MLB Guess the Pitch game to see if I could do it better than the majority class and I have an accuracy of around 40%. 
+
+```{r}
+mean(pitches_2020_regular$pitch_type == 'CH')
+mean(pitches_2020_regular$pitch_type == 'CU')
+mean(pitches_2020_regular$pitch_type == 'FC')
+mean(pitches_2020_regular$pitch_type == 'FF')
+mean(pitches_2020_regular$pitch_type == 'FS')
+mean(pitches_2020_regular$pitch_type == 'SI')
+mean(pitches_2020_regular$pitch_type == 'SL')
+
+```
+
+```{r, include = FALSE}
+## Caret CV
+cv_5 = trainControl(method = "cv", number = 5, classProbs = TRUE, summaryFunction = multiClassSummary)
+```
+### Decision Tree
+```{r, message = FALSE}
+set.seed(432)
+trees = train(pitch_type ~ .,
+              data = pitch_10k,
+              trControl = cv_5,
+              method = 'rpart')
+```
+
+
+### KNN
+```{r}
+set.seed(432)
+knns = train(pitch_type ~ .,
+              data = pitch_10k,
+              trControl = cv_5,
+              method = 'knn')
+```
+
+
+### Random Forest
+```{r}
+set.seed(432)
+rf = train(pitch_type ~., 
+           data = pitch_10k, 
+           trControl = cv_5, 
+           method = 'rf')
+```
 
 ***
 
 ## Results
 
-State your results here.
+```{r}
+set.seed(432)
+(tree_accuracy = accuracy(pitch_test_1k$pitch_type, predict(trees, pitch_test_1k)))
+(knn_accuracy = accuracy(pitch_test_1k$pitch_type, predict(knns, pitch_test_1k)))
+(rf_accuracy = accuracy(pitch_test_1k$pitch_type, predict(rf, pitch_test_1k)))
+```
+
+The accuracies above show that the best model in this case would be a knn with a k of 5. With the test data, our model correctly predicts 80.6% of the pitches compared the baseline of 34% (majority class) and 40% (guessing game).
+
 
 ***
 
 ## Discussion
 
-Discuss your results here.
+While our results are much better than the baseline, we should take this analysis with a grain of salt. Our data set was purposely split because of the limitations of my computer system. If my computer was more powerful, we could further optimize our models and see if a bigger data set would have any effect on our results. With a larger data set, I fully expect our accuracy to improve. In this situation, since time is not an issue, should be able to use more complex models. Another problem to consider is my use of models. I was not able to use any of the models I wanted because of my limited computational power. If I were able to use more complex models, there is no question that my accuracies would be improved. 
+
+Another problem to consider is the speed of the models that I have tested. I chose the decision tree model because of the speed and performance of the model compared to the other models. For example, random forest also predicted the same 86% accuracy but decision trees had the similar results but did the prediction in less than half the time.
+
 
 ***
 
-## Appendix
-
-Place potential additional information here.
